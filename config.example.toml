@@ -1,0 +1,8 @@
+[komga]
+url = "http://localhost:8080"
+email = "user@example.com"
+password = "your_password"
+
+[kavita]
+url = "http://localhost:5000"
+api_key = "YOUR_KAVITA_API_KEY"
