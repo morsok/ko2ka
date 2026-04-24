@@ -7,7 +7,7 @@ from .config import AppConfig, create_default_config
 from .checkpoint import CheckpointManager
 from .komga import KomgaClient
 from .kavita import KavitaClient
-from .matcher import match_series, match_book
+from .matcher import match_series, match_book, match_book_by_filename
 import logging
 
 # Configure logging to print to stderr by default
@@ -62,7 +62,7 @@ def migrate(
     config_path: str = typer.Option("config.toml", "--config", "-c", help="Path to config file"),
     checkpoint_path: str = typer.Option("checkpoint.json", "--checkpoint", help="Path to checkpoint file"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Dry run mode"),
-    trace: bool = typer.Option(False, "--trace", help="Enable verbose trace logging"),
+    log_level: str = typer.Option("INFO", "--log-level", "-l", help="Logging level: DEBUG, INFO, WARNING, ERROR"),
     batch_size: int = typer.Option(100, help="Batch size for fetching"),
     ignore_checkpoint: bool = typer.Option(False, "--ignore-checkpoint", help="Ignore existing checkpoint and start from beginning")
 ):
@@ -70,9 +70,9 @@ def migrate(
     Migrate reading progress from Komga to Kavita.
     """
     # 0. Configure Logging
-    if trace:
-        logging.getLogger().setLevel(logging.DEBUG)
-        logger.debug("Trace Logging Enabled")
+    numeric_level = getattr(logging, log_level.upper(), logging.INFO)
+    logging.getLogger().setLevel(numeric_level)
+    logger.debug("Debug logging enabled")
 
     # 1. Load Config
     if not AppConfig.load(config_path):
@@ -96,21 +96,14 @@ def migrate(
     # 3. Clients
     komga = KomgaClient(cfg)
     kavita = KavitaClient(cfg)
-    
+    komga_roots = cfg.komga.media_roots
+    kavita_roots = cfg.kavita.media_roots
+    path_fallback_enabled = bool(komga_roots or kavita_roots)
+
     # 4. Reports
     succ_file, fail_file = setup_reports()
     
     # 5. Loop
-    # We fetch ALL relevant books (paging) but skip 'offset' amount of items?
-    # Or we rely on date sorting and assume offset corresponds to processed items...
-    # The plan says "Checkpointing: Store the number of items successfully processed (offset). Skip that many items when resuming."
-    # If we fetch page by page, we can assume 'offset' tracks the total processed count.
-    # However, if data changed on Komga (new books added with old dates?), offset might shift.
-    # Ideally tracking ID is better, but simple offset is what was requested.
-    
-    # For efficiency, we should calculate which PAGE start_offset falls into if possible, 
-    # but Komga API paging is standard.
-    # Let's just iterate and skip.
     
     current_idx = 0
     page_num = 0
@@ -157,7 +150,7 @@ def migrate(
 
         with tqdm(total=total_items, initial=offset, unit="book") as pbar:
             for i, (phase, k_book) in enumerate(gen):
-                if i < offset:
+                if i < offset and not ckpt.should_retry(k_book.id):
                     skipped += 1
                     continue
                 
@@ -173,43 +166,74 @@ def migrate(
                     series_results = kavita.search_series(k_book.series_title)
                     k_series = match_series(k_book.series_title, series_results)
                     
+                    book_path = None
+                    if not k_series and path_fallback_enabled:
+                        book_path = komga.get_book_path(k_book.id)
+                        if book_path:
+                            candidates = [book_path]  # identity: try as-is first
+                            for kr in komga_roots:
+                                if book_path.startswith(kr):
+                                    rel = book_path[len(kr):]
+                                    for vr in kavita_roots:
+                                        candidates.append(vr + rel)
+                            for candidate in candidates:
+                                path_results = kavita.search_series_by_path(candidate)
+                                if path_results:
+                                    k_series = path_results[0]
+                                    break
+
                     if not k_series:
                         log_failure(fail_file, k_book, "Series Not Found")
-                        ckpt.update(inc_success=False)
+                        ckpt.mark_failed(k_book.id)
+                        if i >= offset:
+                            ckpt.update(inc_success=False)
                         pbar.update(1)
                         continue
-                        
+
                     # 2. Match Chapter
                     k_chapters = kavita.get_volumes_chapters(k_series.get('id', k_series.get('seriesId')))
                     k_chapter = match_book(k_book.number, k_chapters)
-                    
+
+                    if not k_chapter:
+                        if book_path is None:
+                            book_path = komga.get_book_path(k_book.id)
+                        if book_path:
+                            k_chapter = match_book_by_filename(book_path, k_chapters)
+
                     if not k_chapter:
                         log_failure(fail_file, k_book, "Chapter Not Found")
-                        ckpt.update(inc_success=False)
+                        ckpt.mark_failed(k_book.id)
+                        if i >= offset:
+                            ckpt.update(inc_success=False)
                         pbar.update(1)
                         continue
-                        
+
                     # 3. Update
                     cid = k_chapter.get('id')
+                    vid = k_chapter.get('volumeId', 0)
+                    sid = k_series.get('seriesId', k_series.get('id', 0))
                     action = "Marked Read" if k_book.completed else f"Progress {k_book.page}"
-                    
+
                     if not dry_run:
-                        kavita.update_progress(cid, k_book.page, k_book.completed)
-                        
+                        kavita.update_progress(cid, vid, sid, k_book.page, k_book.completed)
+
                     log_success(succ_file, k_book, cid, action)
-                    
-                    ckpt.update(inc_success=True)
+                    ckpt.mark_resolved(k_book.id)
+                    if i >= offset:
+                        ckpt.update(inc_success=True)
                     processed_session += 1
                     pbar.update(1)
-                    
+
                 except Exception as e:
                     log_failure(fail_file, k_book, f"Exception: {str(e)}")
-                    ckpt.update(inc_success=False)
+                    ckpt.mark_failed(k_book.id)
+                    if i >= offset:
+                        ckpt.update(inc_success=False)
                     pbar.update(1)
 
         break # End of generator
 
-    print(f"[bold]Migration Finished[/bold]. Processed {processed_session} items this session.")
+    print(f"Migration Finished. Processed {processed_session} items this session.")
 
 if __name__ == "__main__":
     app()

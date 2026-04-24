@@ -2,7 +2,9 @@
 url = "http://localhost:8080"
 email = "user@example.com"
 password = "your_password"
+# media_roots = ["/comics", "/bd"]   # filesystem paths; used as fallback when name search fails
 
 [kavita]
 url = "http://localhost:5000"
 api_key = "YOUR_KAVITA_API_KEY"
+# media_roots = ["/kavita/comics", "/kavita/bd"]  # corresponding paths in Kavita (index-matched with komga.media_roots)

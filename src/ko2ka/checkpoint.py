@@ -1,7 +1,7 @@
 import json
 import os
-from typing import Dict, Any, Optional
-from dataclasses import dataclass, asdict
+from typing import Dict, Any, Optional, List
+from dataclasses import dataclass, asdict, field
 import datetime
 
 CHECKPOINT_FILE = "checkpoint.json"
@@ -12,6 +12,7 @@ class CheckpointData:
     last_processed_date: Optional[str] = None
     processed_count: int = 0
     failed_count: int = 0
+    failed_ids: List[str] = field(default_factory=list)
 
 class CheckpointManager:
     def __init__(self, filepath: str = CHECKPOINT_FILE):
@@ -54,3 +55,16 @@ class CheckpointManager:
 
     def get_offset(self) -> int:
         return self.data.offset
+
+    def mark_failed(self, book_id: str):
+        if book_id not in self.data.failed_ids:
+            self.data.failed_ids.append(book_id)
+        self.save()
+
+    def mark_resolved(self, book_id: str):
+        if book_id in self.data.failed_ids:
+            self.data.failed_ids.remove(book_id)
+        self.save()
+
+    def should_retry(self, book_id: str) -> bool:
+        return book_id in self.data.failed_ids

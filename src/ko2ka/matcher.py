@@ -1,5 +1,6 @@
 from typing import List, Dict, Any, Optional
 import difflib
+from pathlib import Path
 
 # We can use fuzzywuzzy/thefuzz if acceptable, but standard lib difflib is safer 
 # if we want to minimize heavy dependencies not in plan. 
@@ -15,6 +16,14 @@ def match_series(komga_series: str, kavita_results: List[Dict[str, Any]]) -> Opt
             
     # 2. Fuzzy match if exact fails?
     # Let's keep it simple for now as requested.
+    return None
+
+def match_book_by_filename(komga_path: str, kavita_chapters: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    target = Path(komga_path).name.lower()
+    for ch in kavita_chapters:
+        for f in ch.get('files', []):
+            if Path(f.get('filePath', '')).name.lower() == target:
+                return ch
     return None
 
 def match_book(komga_number: float, kavita_chapters: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:

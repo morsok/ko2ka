@@ -50,10 +50,30 @@ class KavitaClient:
             logger.debug(f"Kavita Search Response: {resp.status_code} Body={resp.text}")
             resp.raise_for_status()
             data = resp.json()
-            # Filter series
-            return [x for x in data if data.get('type') == 0 or data.get('type') == 'Series']
+            logger.debug(f"Kavita Search Result keys: {list(data.keys()) if isinstance(data, dict) else data}")
+            return data.get('series', [])
         except Exception as e:
             print(f"[ERROR] Kavita Search Error for '{name}': {e}")
+            return []
+
+    def search_series_by_path(self, path_fragment: str) -> List[Dict[str, Any]]:
+        url = f"{self.base_url}/api/Series/all-v2"
+        params = {"pageNumber": 0, "pageSize": 20}
+        body = {
+            "statements": [{"field": 25, "comparison": 7, "value": path_fragment}],  # FilePath Matches %value%
+            "combination": 1,
+            "sortOptions": {"sortField": 1, "isAscending": True},
+            "limitTo": 0
+        }
+        try:
+            logger.debug(f"Kavita Path Search Request: {url} fragment={path_fragment}")
+            resp = self.session.post(url, json=body, params=params)
+            logger.debug(f"Kavita Path Search Response: {resp.status_code} Body={resp.text}")
+            resp.raise_for_status()
+            data = resp.json()
+            return data if isinstance(data, list) else data.get('content', [])
+        except Exception as e:
+            print(f"[ERROR] Kavita Path Search Error for '{path_fragment}': {e}")
             return []
 
     def _ensure_re_imported(self):
@@ -63,10 +83,13 @@ class KavitaClient:
         # Flattened list of chapters
         try:
 
-            url = f"{self.base_url}/api/Series/{series_id}/volumes"
-            logger.debug(f"Kavita Volumes Request: {url}")
-            resp = self.session.get(url)
+            url = f"{self.base_url}/api/Series/volumes"
+            params = {'seriesId': series_id}
+            logger.debug(f"Kavita Volumes Request: {url} params={params}")
+            resp = self.session.get(url, params=params)
             logger.debug(f"Kavita Volumes Response: {resp.status_code} Body={resp.text}")
+            if resp.status_code == 204 or not resp.text:
+                return []
             resp.raise_for_status()
             volumes = resp.json()
             chapters = []
@@ -78,27 +101,22 @@ class KavitaClient:
             print(f"[ERROR] Kavita Get Volumes Error: {e}")
             return []
 
-    def update_progress(self, chapter_id: int, page: int, completed: bool):
-        # /api/Reader/mark-read or /api/Reader/progress
+    def update_progress(self, chapter_id: int, volume_id: int, series_id: int, page: int, completed: bool):
         try:
+            body = {
+                "chapterId": chapter_id,
+                "volumeId": volume_id,
+                "seriesId": series_id,
+            }
             if completed:
-                 # Endpoint might be POST /api/Reader/mark-read with body { chapterId: ... } or query param
-                 # Using query param variant commonly found
-                 url = f"{self.base_url}/api/Reader/mark-read"
-                 params = {'chapterId': chapter_id}
-                 logger.debug(f"Kavita Mark-Read Request: {url} params={params}")
-                 self.session.post(url, params=params)
+                url = f"{self.base_url}/api/Reader/mark-chapter-read"
+                logger.debug(f"Kavita Mark-Chapter-Read Request: {url} body={body}")
+                self.session.post(url, json=body)
             else:
-                 # Update progress
-                 body = {
-                     "chapterId": chapter_id,
-                     "page": page,
-                     "seriesId": 0, # Ignored usually
-                     "volumeId": 0
-                 }
-                 url = f"{self.base_url}/api/Reader/progress"
-                 logger.debug(f"Kavita Progress Request: {url} body={body}")
-                 self.session.post(url, json=body)
+                url = f"{self.base_url}/api/Reader/progress"
+                body["page"] = page
+                logger.debug(f"Kavita Progress Request: {url} body={body}")
+                self.session.post(url, json=body)
         except Exception as e:
             print(f"[ERROR] Kavita Update Progress Error: {e}")
 

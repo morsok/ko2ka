@@ -24,6 +24,18 @@ class KomgaClient:
         self.session = requests.Session()
         self.session.auth = self.auth
 
+    def get_book_path(self, book_id: str) -> Optional[str]:
+        url = f"{self.base_url}/api/v1/books/{book_id}"
+        try:
+            logger.debug(f"Komga Book Path Request: {url}")
+            resp = self.session.get(url)
+            logger.debug(f"Komga Book Path Response: {resp.status_code} Body={resp.text}")
+            resp.raise_for_status()
+            return resp.json().get('url')
+        except Exception as e:
+            print(f"[WARN] Could not fetch book path for {book_id}: {e}")
+            return None
+
     def get_read_books(self, page: int = 0, size: int = 100) -> List[KomgaBookDTO]:
         return self._fetch_books(page, size, "READ")
 
